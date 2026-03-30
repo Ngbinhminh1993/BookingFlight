@@ -11,3 +11,25 @@ venv/
 env/
 **/.venv/
 **/venv/
+
+venv
+__pycache__
+.vscode/
+.pytest_cache/
+.ruff_cache/
+.env
+.env_prod
+postgres_data/
+
+# Terraform
+terraform/.terraform
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/terraform.tfvars
+terraform/terraform.tfvars.json
+
+# AI Agent
+.github/copilot-instructions.md
+
+# Logs
+.logs/
