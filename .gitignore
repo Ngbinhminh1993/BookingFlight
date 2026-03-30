@@ -4,3 +4,10 @@ __pycache__/
 *.pyc
 .env
 .vscode/
+
+# Virtual environments
+.venv/
+venv/
+env/
+**/.venv/
+**/venv/
