@@ -1,6 +1,16 @@
+from fastapi import FastAPI
+# from routers import users
+
+app = FastAPI()
+
+# app.include_router(users.router)
+
+
+# @app.get("/register/")
+# def hello():
+#     return "user registration endpoint"
+
+
+@app.get("/")
 def main():
-    print("Hello from backend!")
-
-
-if __name__ == "__main__":
-    main()
+    return {"message": "Hello, World!"}
