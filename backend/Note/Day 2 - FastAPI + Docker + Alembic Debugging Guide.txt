@@ -1,0 +1,357 @@
+🧭 Mentor Notes: FastAPI + Docker + Alembic Debugging Guide
+
+🎯 The Core Problem
+Your FastAPI app wouldn't start in Docker. Errors kept changing:
+
+ModuleNotFoundError: No module named 'routers'
+ImportError: attempted relative import beyond top-level package
+relation "userindb" does not exist
+alembic: command not found
+
+Root cause: Multiple small configuration issues stacked together. Each fix revealed the next layer. This is normal in backend development.
+
+🔧 Issue 1: Python Imports Breaking in Docker
+What happened
+
+ModuleNotFoundError: No module named 'routers'
+
+Why it happened
+
+Docker copies your code to /app and runs from there
+Python only treats a folder as a "package" if it has __init__.py
+Relative imports like from ..schemas break because there's no folder "above" /app
+
+Steps to fix (in order)
+
+Add __init__.py to every importable folder
+
+touch routers/__init__.py schemas/__init__.py models/__init__.py crud/__init__.py
+
+Why: Tells Python "this folder is a package, you can import from it"
+
+Change all relative imports to absolute imports
+
+# Before (breaks in Docker)
+from ..schemas.user import UserCreate
+
+# After (works everywhere)
+from schemas.user import UserCreate
+
+Why: Absolute imports start from project root (/app), which is stable in Docker
+
+Remove __init__.py from project root if it exists
+
+rm __init__.py  # the one in backend/ root, not in subfolders
+
+Why: A root __init__.py can confuse FastAPI's auto-discovery
+
+Trap to avoid
+Don't use from ..x imports in apps that run in Docker. They're fragile.
+Don't forget __init__.py when creating new folders.
+
+Mental model
+📦 Python is a librarian. It only finds books in folders marked with a special tag (__init__.py). No tag = folder doesn't exist to Python.
+
+🔧 Issue 2: Function Parameter Name Mismatch
+
+What happened
+
+TypeError: get_user_by_email() missing 1 required positional argument
+
+Why it happened
+
+Endpoint defined: def register_user(..., session: Session = Depends(...))
+Code called: get_user_by_email(db, user_in.email)
+db doesn't exist in that function. Only session does.
+
+Steps to fix
+
+Find the mismatched variable name
+
+grep -n "get_user_by_email" routers/users.py
+
+Change the call to match the parameter name
+
+# Before
+user = get_user_by_email(db, user_in.email)
+
+# After
+user = get_user_by_email(session, user_in.email)
+
+Why: You can only use variable names that exist in the current scope
+
+Trap to avoid
+Don't assume variable names. Check the function signature first.
+Use IDE autocomplete to prevent typos.
+
+Mental model
+🏷️ Function parameters are like name tags at a conference. If you call out "db!" but your tag says "session", nobody answers.
+
+🔧 Issue 3: Alembic Not Available in Docker
+What happened
+
+bash: alembic: command not found
+
+Why it happened
+
+uv sync --frozen only installs what's declared in pyproject.toml + uv.lock
+Alembic wasn't listed as a dependency → not installed in Docker image
+Your host had Alembic (in your local venv), but Docker builds from scratch
+
+Steps to fix
+
+Add Alembic to dependencies on host
+
+uv add alembic
+
+Why: Updates both pyproject.toml and uv.lock so Docker installs it
+
+Rebuild Docker image
+
+docker compose build --no-cache
+
+Why: Forces Docker to re-run uv sync with the updated lock file
+
+Trap to avoid
+
+Don't edit pyproject.toml manually. Use uv add to keep lock file in sync.
+Don't forget --no-cache when rebuilding after dependency changes.
+
+Mental model
+📦 Docker is a photocopier. It only copies what you tell it to. If Alembic isn't in your "shopping list" (pyproject.toml), it won't be in the image.
+
+🔧 Issue 4: Alembic Configuration Incomplete
+What happened
+
+FAILED: No 'script_location' key found in configuration
+or
+FileNotFoundError: alembic/script.py.mako
+
+Why it happened
+
+Alembic was never properly initialized in your project
+Missing files: alembic.ini, script.py.mako, or incomplete env.py
+env.py didn't import your models or set target_metadata
+
+Steps to fix
+
+Create or fix alembic.ini
+
+[alembic]
+script_location = alembic
+sqlalchemy.url = postgresql://user:pass@localhost:5432/dbname
+
+Why: Tells Alembic where to find migration scripts and how to connect to DB
+
+Create script.py.mako template (if missing)
+
+Why: Alembic uses this template to generate new migration files
+
+Update alembic/env.py
+
+# At top: import your models
+from models.users import UserInDB
+
+# Set metadata
+target_metadata = SQLModel.metadata
+
+# In context.configure():
+context.configure(
+    connection=connection,
+    target_metadata=target_metadata,  # ← Critical!
+    ...
+)
+
+Why: Tells Alembic which models to compare against the database
+
+Trap to avoid
+
+Don't skip importing your models in env.py. Alembic can't see what it doesn't import.
+Don't leave target_metadata = None. Alembic needs to know what to track.
+
+Mental model
+🗺️ Alembic is a translator. It needs: (1) a dictionary (target_metadata) to understand your models, and (2) a phone line (sqlalchemy.url) to talk to the database. Missing either → silence.
+
+🔧 Issue 5: Empty Migration File Generated
+What happened
+
+def upgrade() -> None:
+    pass  # ← No code generated!
+
+Why it happened
+
+Alembic compares "what's in the database" vs "what's in your models"
+If it can't connect to the DB OR can't see your models → it sees "nothing vs nothing" → generates empty migration
+
+Steps to fix
+Verify database connection in alembic.ini
+grep sqlalchemy.url alembic.ini
+
+Why: No connection = can't see existing tables
+
+Verify model import in env.py
+grep "from models" alembic/env.py
+
+Why: No import = can't see desired tables
+
+Verify model has table=True
+
+class UserInDB(SQLModel, table=True):  # ← Required!
+
+Why: Without table=True, SQLModel treats it as a schema-only class (no database table)
+
+Regenerate migration
+
+rm alembic/versions/old_file.py
+uv run alembic revision --autogenerate -m "create users table"
+
+Trap to avoid
+
+Don't assume Alembic "just works". It needs both DB access AND model visibility.
+Don't forget table=True on SQLModel classes you want as database tables.
+
+Mental model
+⚖️ Alembic is a scale. Left side: your database. Right side: your models. If either side is empty, the scale can't measure the difference → no migration code.
+
+🔧 Issue 6: localhost Doesn't Work Inside Docker
+What happened
+
+connection to server at "localhost" failed: Connection refused
+
+Why it happened
+
+Inside a Docker container, localhost means the container itself
+Your Postgres database is in a different container named db
+Containers on the same Docker network talk via service name, not localhost
+
+Steps to fix
+
+Option A (Recommended for development): Run migrations on host
+
+# Exit container
+exit
+
+# Run on host where localhost:5432 maps to Docker-exposed Postgres
+uv run alembic upgrade head
+
+Why: Host machine's localhost:5432 correctly points to Docker's exposed port
+
+Option B (For production): Use service name in container
+
+# In alembic.ini, change:
+sqlalchemy.url = postgresql://user:pass@db:5432/dbname  # ← "db" is service name
+
+Why: Inside Docker network, containers reach each other by service name
+
+Trap to avoid
+
+Don't use localhost for container-to-container communication.
+Don't forget to rebuild Docker after changing alembic.ini.
+
+Mental model
+🌐 Networking rule:
+Host → Docker DB: use localhost:5432 ✅
+Container → Docker DB: use db:5432 (service name) ✅
+Container → localhost:5432: connects to ITSELF (no DB) ❌
+
+🔧 Issue 7: Lost Migration File Due to --rm
+
+What happened
+Generated migration file inside container
+Exited with docker compose run --rm
+File disappeared forever
+
+Why it happened
+--rm flag deletes the container and ALL files created inside it when you exit
+Docker containers are ephemeral by design
+
+Steps to fix
+
+Always generate migrations on host machine
+# On host, not inside container:
+uv run alembic revision --autogenerate -m "describe change"
+
+Why: Files saved on host persist. Docker copies them into image during build.
+
+If you must work inside container, use volumes
+# docker-compose.yml
+services:
+  fastapi-app:
+    volumes:
+      - ./alembic:/app/alembic  # Sync folder between host and container
+
+Trap to avoid
+
+Never save important generated files inside a --rm container.
+Always verify files exist on host before rebuilding Docker.
+
+Mental model
+🗑️ --rm means "throw away this container when done". Anything created inside is gone. Work on host. Rebuild. Deploy.
+
+🧠 Key Mental Models to Remember
+
+Model 1: Docker is a Photocopier
+It copies files from host to image at build time
+Changes inside container are lost unless you use volumes or rebuild
+Always edit source files on host, then rebuild
+
+Model 2: Python Imports Start from Project Root
+In Docker, project root = /app (or whatever WORKDIR is set to)
+Use absolute imports: from schemas.user import ...
+Avoid relative imports: from ..schemas (fragile)
+
+Model 3: Alembic Needs Two Things to Work
+Database connection (sqlalchemy.url in alembic.ini)
+Model visibility (target_metadata = SQLModel.metadata in env.py)
+Missing either → empty migration
+
+Model 4: SQLModel table=True is the Switch
+class User(SQLModel) → Just a schema (validation/serialization)
+class User(SQLModel, table=True) → A database table (creates table)
+Alembic only sees classes with table=True
+
+Model 5: Container Networking Uses Service Names
+Containers on same Docker network talk via service name (db, postgres-db)
+localhost inside container = the container itself
+Host machine uses localhost:5432 to reach Docker-exposed ports
+
+✅ Quick Checklist: Next Time You Hit Similar Issues
+
+Import errors in Docker
+Does every importable folder have __init__.py?
+Are imports absolute (from project root), not relative?
+Did you remove __init__.py from project root if it confuses auto-discovery?
+Did you rebuild Docker with --no-cache after fixing imports?
+
+Alembic not working
+Is Alembic in pyproject.toml? (uv add alembic)
+Does alembic.ini have sqlalchemy.url set correctly?
+Does env.py import your models?
+Does env.py set target_metadata = SQLModel.metadata?
+Does context.configure() pass target_metadata=target_metadata?
+Do your models have table=True?
+
+Empty migration file
+Can Alembic connect to the database? (check URL)
+Can Alembic import your models? (test with python -c "from models.x import Y")
+Is target_metadata set and passed to context.configure()?
+Did you delete the old empty migration before regenerating?
+
+Database connection issues
+Running on host? Use localhost:5432
+Running in container? Use service name like db:5432
+Is Postgres container running? (docker compose ps)
+Are credentials correct in DATABASE_URL?
+
+Lost files after Docker run
+Did you use --rm? If yes, files inside are gone
+Are you generating files on host, not inside container?
+Did you rebuild Docker after changing source files?
+
+💬 Final Mentor Note
+You didn't just fix bugs today. You learned how systems connect:
+How Python finds code
+How Docker copies files
+How Alembic compares models to database
+How containers talk to each other
+

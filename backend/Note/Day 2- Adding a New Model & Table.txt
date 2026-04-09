@@ -1,0 +1,119 @@
+🧭 Senior Engineer Guide: Adding a New Model & Table
+Practical flow. Simple English. No theory. Copy-paste friendly.
+
+🔗 The Full Flow Chain
+Define Model → Register in Alembic → Generate Migration → Verify File → Apply to Database → Verify Table → Build CRUD & API → Test & Continue Development
+
+📝 Step-by-Step Breakdown
+
+1. Define the Model
+Where: models/your_model.py
+Code:
+
+class YourModel(SQLModel, table=True):
+    __tablename__ = "your_model"
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    name: str = Field(index=True)
+
+Why: table=True is the switch. It tells SQLModel "this is a database table, not just a data shape." Without it, no table gets created.
+
+2. Register with Alembic
+Where: alembic/env.py
+Action: Add from models.your_model import YourModel near the top (with your other model imports)
+Why: Alembic doesn't scan folders automatically. It only knows about models you explicitly import. This connects your Python class to the migration engine.
+
+3. Generate the Migration
+Command: uv run alembic revision --autogenerate -m "add your_model table"
+Why: Alembic compares your imported models (what you want) against the live database (what exists). It writes the SQL difference into a new Python file in alembic/versions/.
+
+4. Verify the Migration File
+Where: alembic/versions/[random_id]_add_your_model_table.py
+Action: Open it. Look for op.create_table("your_model", ...) with your exact columns
+Why: Autogenerate is helpful but not perfect. It can miss indexes, constraints, or generate empty files. Never run a migration you haven't read.
+
+5. Apply the Migration
+Command: uv run alembic upgrade head
+Where: Run on your host machine (not inside Docker)
+Why: Executes the SQL against PostgreSQL. This physically creates the table. Running on host avoids Docker networking confusion with localhost.
+
+6. Verify the Table Exists
+Action: Connect to your database via CLI or DB client, or run a quick Python test:
+
+uv run python -c "from sqlmodel import create_engine; from models.your_model import YourModel; engine = create_engine('your_db_url'); with engine.connect() as conn: print(conn.execute(select(YourModel.__table__.c.id).limit(1)).fetchall())"
+
+Why: Confirms the table is live, columns match your model, and your app can actually query it.
+
+7. Build CRUD & API Layer
+Flow:
+Schema (pydantic) → CRUD (database logic) → Router (HTTP endpoints)
+Why: Clean separation. Schemas handle API input/output validation. CRUD handles session management and queries. Routers handle HTTP routing. They all reference the same underlying Model.
+
+8. Test & Continue Development
+Action: Run pytest, hit endpoints via Swagger (/docs), verify data flows in both directions
+Why: Catches integration bugs early. Ensures model ↔ schema ↔ router alignment before adding business complexity or relationships.
+
+🔗 How Model & Table Stay in Sync
+Your Model is the single source of truth. Here's the pipeline:
+Model Definition → SQLModel Metadata → Alembic Reads Metadata → Alembic Generates SQL Migration → Migration Runs Against DB → Table Created/Updated
+
+Every time you change the model:
+Add/remove fields → run autogenerate → review migration → upgrade head
+Never edit the database directly
+Never skip the migration step
+Keep the alembic/versions/ folder in version control
+This keeps your code, your migrations, and your database in perfect alignment.
+
+🛡️ Best Practices & Traps to Avoid
+Always use table=True for database models. Omit it only for pure API schemas.
+Import new models in alembic/env.py immediately after creating them.
+Always open and read auto-generated migration files before running them.
+Use explicit __tablename__ to avoid pluralization surprises.
+Keep column names consistent: snake_case in DB, camelCase in API (use alias if needed).
+Add index=True or unique=True in the model, not in the migration manually.
+Test migrations on a fresh local database before pushing to shared environments.
+Never delete or edit old migration files after they've been applied to production.
+
+🚀 Safe Continuation Guide
+Write CRUD first: Create get, create, update, delete functions in crud/your_model.py
+Wrap in router: Create routers/your_model.py with @router.get, @router.post, etc.
+Register router: Add app.include_router(your_model_router) in main.py
+Add validation schemas: Create schemas/your_model.py for request/response shapes
+Test locally: Hit endpoints, verify DB rows match expectations
+Commit everything: Model, migration, CRUD, router, schemas, tests
+Move to next feature: Your table is live, version-controlled, and ready for relationships or business logic.
+
+🐞 Quick Debug Checklist
+
+Migration file is empty (pass)
+
+Check alembic/env.py imports your new model
+Verify target_metadata = SQLModel.metadata is set
+Confirm alembic.ini has correct sqlalchemy.url
+Delete empty file, regenerate
+
+Connection refused during upgrade
+
+Ensure Postgres container is running (docker compose ps)
+Verify alembic.ini uses localhost when running on host
+Check username/password/database name match your setup
+
+Column or constraint missing in DB
+
+Open migration file, confirm op.create_table or op.add_column exists
+Check model has correct types (str, int, UUID, etc.)
+Rerun uv run alembic upgrade head after fixing
+
+Import error in env.py
+
+Verify sys.path.insert(0, ...) points to project root
+Check folder structure matches import path (from models.x import Y)
+Ensure __init__.py exists in models/
+
+Alembic says "no changes" but you modified model
+
+Confirm you saved the model file
+Verify table=True is present
+Check you didn't accidentally skip --autogenerate
+Regenerate with a new message
+
+💡 Mentor Note: Migrations are just version control for your database schema. Treat them like code. Review them. Test them. Commit them. When you follow the flow above, adding new tables becomes a 5-minute routine instead of a debugging session. You've got this.

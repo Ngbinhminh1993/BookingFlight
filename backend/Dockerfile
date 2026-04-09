@@ -23,7 +23,8 @@ RUN uv sync --frozen --no-cache
 # -> --frozen = MUST match exact versions (safe & reproducible)
 # -> --no-cache = don't store cache (smaller image)
 
-CMD ["/app/.venv/bin/fastapi", "run", "main.py", "--port", "80", "--host", "0.0.0.0"]
+#CMD ["/app/.venv/bin/fastapi", "run", "main.py", "--port", "80", "--host", "0.0.0.0"]
+CMD ["/app/.venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80"]
 
 # CMD = default command that runs when container starts
 # -> Think: "what should this container DO when it starts?"
