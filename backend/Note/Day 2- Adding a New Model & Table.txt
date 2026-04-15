@@ -117,3 +117,83 @@ Check you didn't accidentally skip --autogenerate
 Regenerate with a new message
 
 💡 Mentor Note: Migrations are just version control for your database schema. Treat them like code. Review them. Test them. Commit them. When you follow the flow above, adding new tables becomes a 5-minute routine instead of a debugging session. You've got this.
+
+
+╔════════════════════════════════════════════════════════════════╗
+║ 🚀 NEW MODEL & TABLE PIPELINE (FastAPI + SQLModel + Alembic)  ║
+╚════════════════════════════════════════════════════════════════╝
+
+1️⃣ DEFINE MODEL
+   👉 Create: models/my_model.py
+      class MyModel(SQLModel, table=True):
+          __tablename__ = "my_model"
+          id: UUID = Field(default_factory=uuid4, primary_key=True)
+          name: str = Field(index=True)
+   ⚠️ FORGET table=True → Just a Python schema, ZERO DB table created.
+   ✅ ALWAYS set __tablename__ explicitly to avoid pluralization bugs.
+
+2️⃣ REGISTER WITH ALEMBIC
+   👉 Edit: alembic/env.py (top section)
+      from models.my_model import MyModel
+      target_metadata = SQLModel.metadata
+   ⚠️ SKIP import → Alembic can't see your model → generates empty migration!
+   ✅ IMPORT before running ANY alembic command.
+
+3️⃣ GENERATE MIGRATION
+   👉 Run: uv run alembic revision --autogenerate -m "add my_model table"
+   🧠 Compares: [Imported Models] ↔ [Live Database Schema]
+   📝 Outputs: alembic/versions/[random]_add_my_model_table.py
+   ⚠️ RUN inside `docker run --rm` → File vanishes when container exits!
+   ✅ ALWAYS run on host machine during local dev.
+
+4️⃣ VERIFY MIGRATION FILE
+   👉 Open: alembic/versions/[random]_add_my_model_table.py
+   🔍 CHECK: op.create_table("my_model", sa.Column(...)) matches your model
+   🛠️ DEBUG: If it says `pass` → Step 2 missing or DB URL wrong.
+   ✅ NEVER `upgrade head` without reading the generated SQL first.
+
+5️⃣ APPLY MIGRATION
+   👉 Run: uv run alembic upgrade head
+   📌 RUN on host (localhost:5432 points to Docker-exposed Postgres)
+   ⚠️ RUN in container → "localhost" points to itself → Connection refused!
+   ✅ USE container service name (db:5432) ONLY for prod/CI scripts.
+
+6️⃣ VERIFY TABLE EXISTS
+   👉 Run: docker compose exec db psql -U postgres -d your_db -c "\dt"
+   🔍 CHECK: my_model appears in the list
+   🛠️ DEBUG: Missing? → Check alembic logs, re-run upgrade, verify URL.
+   ✅ CONFIRM before writing a single line of CRUD code.
+
+7️⃣ BUILD CRUD LAYER
+   👉 Create: crud/my_model.py
+      def create(session, data): session.add(); session.commit(); return obj
+      def get(session, id): return session.get(MyModel, id)
+   ⚠️ FORGET session.refresh() → Returns stale/partial objects.
+   ✅ KEEP CRUD pure: Only DB logic, NO HTTP status codes or JSON handling.
+
+8️⃣ BUILD API ROUTER
+   👉 Create: routers/my_model.py
+      @router.post() → Validate request → Call CRUD → Return response
+      @router.get() → Fetch → Handle 404 → Return response
+   ⚠️ MIX CRUD & Routes → Tight coupling, breaks testing & reusability.
+   ✅ ADD to main.py: app.include_router(my_model_router)
+
+9️⃣ TEST & ITERATE
+   👉 Open: http://localhost:8000/docs
+   🧪 HIT POST → Check DB row → HIT GET → Verify exact match
+   🛠️ DEBUG: 500 Error? → Check container logs for missing session/args.
+   ✅ TEST edge cases: Duplicates, invalid types, missing required fields.
+
+🔟 COMMIT & CONTINUE
+   👉 Run: git add . && git commit -m "feat: add MyModel table & CRUD"
+   🚀 Pipeline complete. Table is live, version-controlled, ready for next.
+   ✅ NEXT: Add foreign keys, background tasks, or auth guards.
+
+════════════════════════════════════════════════════════════════
+🧠 MENTAL MODEL SUMMARY (Save This)
+════════════════════════════════════════════════════════════════
+Model = Blueprint → Alembic = Contractor → DB = Building
+Code changes nothing until Alembic writes & runs the SQL.
+Always import models in env.py, verify migrations before applying,
+keep CRUD separate from HTTP, and run migrations on the host.
+Follow the pipeline → repeat → scale.
