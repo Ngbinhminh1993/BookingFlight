@@ -5,10 +5,17 @@ services:
     restart: always
     ports:
       - "8000:80"
+      - "5678:5678"
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/postgres
     depends_on:
       - db
+    command: >
+      sh -c "
+        uv run python -m debugpy --listen 0.0.0.0:5678 --wait-for-client -m uvicorn main:app --host 0.0.0.0 --port 80 --reload
+      "
+    volumes:
+      - .:/app
 
   db:
     image: postgres:16

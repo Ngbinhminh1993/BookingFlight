@@ -13,6 +13,12 @@ dependencies = [
     "passlib>=1.7.4",
     "pre-commit>=4.5.1",
     "psycopg2-binary>=2.9.11",
+    "pyjwt>=2.12.1",
     "pytest>=9.0.2",
     "sqlmodel>=0.0.38",
+]
+
+[dependency-groups]
+dev = [
+    "debugpy>=1.8.20",
 ]
